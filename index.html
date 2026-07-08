@@ -2,149 +2,376 @@
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>语音语言识别（含压缩）</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <title>语音语言识别</title>
   <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
     body {
       font-family: system-ui, -apple-system, sans-serif;
-      max-width: 520px;
-      margin: 2rem auto;
-      padding: 0 1.2rem;
-      background: #f9fafb;
-      color: #1f2937;
+      background: #f3f4f6;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 100vh;
+      padding: 1rem;
     }
     .card {
       background: white;
-      border-radius: 16px;
-      padding: 1.8rem;
-      box-shadow: 0 4px 12px rgba(0,0,0,0.05);
+      border-radius: 24px;
+      padding: 2rem 1.5rem 1.8rem;
+      width: 100%;
+      max-width: 380px;
+      box-shadow: 0 20px 30px rgba(0,0,0,0.05);
+      text-align: center;
     }
     h2 {
-      margin: 0 0 0.6rem;
       font-size: 1.6rem;
+      margin-bottom: 0.3rem;
     }
     .sub {
       color: #6b7280;
-      margin-bottom: 1.5rem;
       font-size: 0.95rem;
+      margin-bottom: 2rem;
     }
-    input[type="file"] {
-      display: block;
+
+    /* 录音按钮 */
+    .record-btn {
       width: 100%;
-      padding: 0.7rem;
-      border: 2px dashed #d1d5db;
-      border-radius: 10px;
-      background: #f3f4f6;
-      cursor: pointer;
-      margin-bottom: 1rem;
-      font-size: 0.95rem;
-    }
-    button {
+      padding: 1.2rem;
+      font-size: 1.2rem;
+      font-weight: 600;
+      border: none;
+      border-radius: 20px;
       background: #2563eb;
       color: white;
-      border: none;
-      padding: 0.8rem 1.6rem;
-      font-size: 1rem;
-      border-radius: 10px;
       cursor: pointer;
-      font-weight: 500;
-      transition: background 0.2s;
-      width: 100%;
+      transition: background 0.15s, transform 0.1s;
+      touch-action: none;
+      user-select: none;
+      -webkit-user-select: none;
+      -webkit-tap-highlight-color: transparent;
     }
-    button:hover {
+    .record-btn:active {
       background: #1d4ed8;
+      transform: scale(0.98);
     }
-    button:disabled {
+    .record-btn.recording {
+      background: #dc2626;
+      animation: pulse 1.2s infinite;
+    }
+    @keyframes pulse {
+      0% { box-shadow: 0 0 0 0 rgba(220,38,38,0.4); }
+      70% { box-shadow: 0 0 0 15px rgba(220,38,38,0); }
+      100% { box-shadow: 0 0 0 0 rgba(220,38,38,0); }
+    }
+    .record-btn:disabled {
       background: #93c5fd;
       cursor: not-allowed;
+      animation: none;
     }
-    #result {
-      margin-top: 1.5rem;
+
+    /* 状态区 */
+    .status {
+      margin-top: 1.4rem;
+      font-size: 0.9rem;
+      color: #4b5563;
+      min-height: 2rem;
+    }
+    .result-box {
+      margin-top: 1rem;
       background: #f0fdf4;
       border: 1px solid #bbf7d0;
-      border-radius: 10px;
-      padding: 1rem;
+      border-radius: 12px;
+      padding: 0.9rem;
+      font-size: 0.9rem;
+      text-align: left;
       white-space: pre-wrap;
-      font-size: 0.95rem;
-      min-height: 2.5rem;
+      color: #166534;
+      display: none;
     }
-    .error {
+    .result-box.error {
       background: #fef2f2;
       border-color: #fecaca;
       color: #b91c1c;
     }
-    .info {
-      color: #4b5563;
+    .result-box.info {
+      background: #f0f9ff;
+      border-color: #bae6fd;
+      color: #0369a1;
+    }
+    .timer {
+      font-weight: 600;
+      color: #dc2626;
+      font-size: 1rem;
+    }
+    .max-note {
+      color: #9ca3af;
+      font-size: 0.8rem;
+      margin-top: 0.3rem;
     }
   </style>
 </head>
 <body>
   <div class="card">
-    <h2>🎤 语音 → 语言识别</h2>
-    <p class="sub">上传任意音频，自动压缩后识别语言与内容</p>
+    <h2>🎤 语音识别语言</h2>
+    <p class="sub">按住录音，松手即识别</p>
 
-    <input type="file" id="audioFile" accept="audio/*">
-    <button id="uploadBtn">上传并识别</button>
+    <button class="record-btn" id="recordBtn">按住 录音</button>
+    <div class="max-note">最长录制 10 秒，自动去除静音</div>
 
-    <div id="result" class="info">等待上传…</div>
+    <div class="status" id="status">等待操作…</div>
+    <div class="result-box" id="resultBox"></div>
   </div>
 
   <script>
-    // ⚠️ 请将这里替换为你的 Cloudflare Worker 地址
-    const WORKER_URL = 'https://audio.gyegt614.top/';
+    // ⚠️ 请替换为你的 Cloudflare Worker 地址
+    const WORKER_URL = 'https://your-worker.workers.dev';
 
-    const fileInput = document.getElementById('audioFile');
-    const uploadBtn = document.getElementById('uploadBtn');
-    const resultDiv = document.getElementById('result');
+    // DOM 元素
+    const recordBtn = document.getElementById('recordBtn');
+    const statusDiv = document.getElementById('status');
+    const resultBox = document.getElementById('resultBox');
+
+    // 全局状态
+    let mediaStream = null;          // 麦克风流
+    let mediaRecorder = null;       // 当前录制器
+    let audioChunks = [];           // 录音数据块
+    let recording = false;         // 是否正在录音
+    let recordStartTime = 0;
+    let maxRecordTimer = null;     // 10秒超时定时器
+    let timerInterval = null;      // 刷新用时定时器
+    let pendingProcess = false;    // 防止重复提交
+
+    // 初始化：预请求麦克风权限（在首次触摸时触发）
+    async function ensureStream() {
+      if (mediaStream && mediaStream.active) return mediaStream;
+      try {
+        mediaStream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            sampleRate: 16000,      // 可选提示，浏览器不一定遵守
+            channelCount: 1,
+            echoCancellation: true,
+            noiseSuppression: true,
+          }
+        });
+        return mediaStream;
+      } catch (err) {
+        throw new Error('无法访问麦克风: ' + err.message);
+      }
+    }
+
+    // 开始录音
+    async function startRecording() {
+      if (recording || pendingProcess) return;
+      
+      // 确保流已就绪
+      if (!mediaStream || !mediaStream.active) {
+        statusDiv.textContent = '正在请求麦克风…';
+        try {
+          await ensureStream();
+        } catch (e) {
+          showResult(e.message, 'error');
+          return;
+        }
+      }
+
+      audioChunks = [];
+      recording = true;
+      pendingProcess = false;
+      recordStartTime = Date.now();
+      updateButtonState(true);
+
+      // 创建 MediaRecorder，优先选用 webm 格式
+      const options = { mimeType: 'audio/webm' };
+      if (!MediaRecorder.isTypeSupported(options.mimeType)) {
+        options.mimeType = 'audio/mp4'; // 降级方案
+      }
+      try {
+        mediaRecorder = new MediaRecorder(mediaStream, options);
+      } catch (e) {
+        // 某些移动端可能不支持指定 mime，使用默认
+        mediaRecorder = new MediaRecorder(mediaStream);
+      }
+
+      mediaRecorder.ondataavailable = (event) => {
+        if (event.data && event.data.size > 0) {
+          audioChunks.push(event.data);
+        }
+      };
+
+      mediaRecorder.onstop = () => {
+        // 录音结束后处理
+        if (!pendingProcess) {
+          processRecording();
+        }
+      };
+
+      // 启动录制，每秒收集一次数据（确保 ondataavailable 触发）
+      mediaRecorder.start(1000);
+      statusDiv.textContent = '🎙️ 正在录音…';
+      startTimer();
+
+      // 10秒后自动停止
+      maxRecordTimer = setTimeout(() => {
+        if (recording) {
+          statusDiv.textContent = '⏰ 已达到 10 秒上限';
+          stopRecording();
+        }
+      }, 10000);
+    }
+
+    // 停止录音
+    function stopRecording() {
+      if (!recording) return;
+      recording = false;
+      updateButtonState(false);
+      
+      // 清除定时器
+      if (maxRecordTimer) clearTimeout(maxRecordTimer);
+      if (timerInterval) clearInterval(timerInterval);
+      
+      if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+        mediaRecorder.stop();
+      }
+    }
+
+    // 处理录音数据：去静音 → 压缩 → 上传
+    async function processRecording() {
+      pendingProcess = true;
+      statusDiv.textContent = '⏳ 正在处理音频…';
+      
+      try {
+        if (audioChunks.length === 0) {
+          throw new Error('未录制到音频');
+        }
+
+        const audioBlob = new Blob(audioChunks, { type: mediaRecorder?.mimeType || 'audio/webm' });
+        
+        // 解码音频
+        const audioCtx = new AudioContext();
+        const arrayBuffer = await audioBlob.arrayBuffer();
+        const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+        await audioCtx.close();
+
+        // 提取单声道数据
+        const channelData = audioBuffer.getChannelData(0);
+        
+        // 去除开头和结尾静音（阈值 0.02）
+        const threshold = 0.02;
+        let startIdx = 0;
+        let endIdx = channelData.length - 1;
+
+        while (startIdx < channelData.length && Math.abs(channelData[startIdx]) < threshold) startIdx++;
+        while (endIdx > startIdx && Math.abs(channelData[endIdx]) < threshold) endIdx--;
+
+        if (startIdx >= endIdx) {
+          throw new Error('未检测到有效语音（可能是静音）');
+        }
+
+        const trimmedLength = endIdx - startIdx + 1;
+        const trimmedData = channelData.slice(startIdx, endIdx + 1);
+
+        // 重采样至 16kHz 单声道，并生成 WAV
+        const wavBlob = await resampleAndCreateWav(trimmedData, audioBuffer.sampleRate);
+
+        // 显示压缩信息
+        const origKB = (audioBlob.size / 1024).toFixed(1);
+        const wavKB = (wavBlob.size / 1024).toFixed(1);
+        statusDiv.textContent = `✅ 处理完成（${origKB} KB → ${wavKB} KB），正在识别…`;
+
+        // 发送到 Worker
+        const response = await fetch(WORKER_URL, {
+          method: 'POST',
+          body: wavBlob,
+          headers: { 'Content-Type': 'audio/wav' },
+        });
+
+        if (!response.ok) {
+          const err = await response.json().catch(() => ({}));
+          throw new Error(err.error || `服务器错误 (${response.status})`);
+        }
+
+        const data = await response.json();
+        showResult(`🗣️ 语言：${data.language}<br>📝 内容：${data.text}`, 'success');
+        statusDiv.textContent = '识别完成 ✓';
+
+      } catch (err) {
+        showResult(`❌ ${err.message}`, 'error');
+        statusDiv.textContent = '处理失败';
+      } finally {
+        pendingProcess = false;
+        recordBtn.disabled = false;
+        recordBtn.classList.remove('recording');
+      }
+    }
 
     /**
-     * 将音频文件转换为 16kHz 单声道 WAV，大幅压缩体积
-     * @param {File} file 原始音频文件
-     * @returns {Promise<Blob>} 压缩后的 WAV Blob
+     * 将裁剪后的 PCM 数据重采样到 16kHz，并生成 WAV Blob
+     * @param {Float32Array} pcmData  原始采样率的单声道浮点数据
+     * @param {number} originalSampleRate  原始采样率
+     * @returns {Promise<Blob>} 16kHz 单声道 WAV
      */
-    async function convertTo16kMonoWav(file) {
-      const arrayBuffer = await file.arrayBuffer();
-      const audioCtx = new AudioContext({ sampleRate: 16000 });
-      const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
-      await audioCtx.close();
+    async function resampleAndCreateWav(pcmData, originalSampleRate) {
+      // 使用 OfflineAudioContext 进行高质量重采样
+      const offlineCtx = new OfflineAudioContext(1, pcmData.length, originalSampleRate);
+      const buffer = offlineCtx.createBuffer(1, pcmData.length, originalSampleRate);
+      buffer.copyToChannel(pcmData, 0);
+      
+      const source = offlineCtx.createBufferSource();
+      source.buffer = buffer;
+      source.connect(offlineCtx.destination);
+      source.start(0);
+      
+      const renderedBuffer = await offlineCtx.startRendering(); // 此时采样率仍为 originalSampleRate
 
-      // 提取单声道数据（多声道自动取第一声道）
+      // 创建目标 16kHz 的 OfflineAudioContext 重采样
+      const duration = renderedBuffer.duration;
+      const targetSampleRate = 16000;
+      const targetLength = Math.ceil(duration * targetSampleRate);
+      
+      const resampleCtx = new OfflineAudioContext(1, targetLength, targetSampleRate);
+      const srcNode = resampleCtx.createBufferSource();
+      srcNode.buffer = renderedBuffer;
+      srcNode.connect(resampleCtx.destination);
+      srcNode.start(0);
+      
+      const finalBuffer = await resampleCtx.startRendering();
+      
+      // 将 finalBuffer 转换为 WAV
+      return audioBufferToWavBlob(finalBuffer);
+    }
+
+    function audioBufferToWavBlob(audioBuffer) {
       const channelData = audioBuffer.getChannelData(0);
       const length = channelData.length;
       const samples = new Int16Array(length);
       for (let i = 0; i < length; i++) {
-        // 限幅并转为 16 位整数
         const s = Math.max(-1, Math.min(1, channelData[i]));
         samples[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
       }
 
-      // 构建 WAV 文件 (44 字节头 + 音频数据)
       const buffer = new ArrayBuffer(44 + samples.length * 2);
       const view = new DataView(buffer);
-
-      // RIFF 头
       writeString(view, 0, 'RIFF');
       view.setUint32(4, 36 + samples.length * 2, true);
       writeString(view, 8, 'WAVE');
-
-      // fmt 子块
       writeString(view, 12, 'fmt ');
-      view.setUint32(16, 16, true);          // PCM 格式
-      view.setUint16(20, 1, true);           // 线性 PCM
-      view.setUint16(22, 1, true);           // 单声道
-      view.setUint32(24, 16000, true);       // 采样率
-      view.setUint32(28, 16000 * 2, true);   // 字节率
-      view.setUint16(32, 2, true);           // 块对齐
-      view.setUint16(34, 16, true);          // 位深度
-
-      // data 子块
+      view.setUint32(16, 16, true);
+      view.setUint16(20, 1, true);
+      view.setUint16(22, 1, true);          // 单声道
+      view.setUint32(24, 16000, true);      // 采样率 16kHz
+      view.setUint32(28, 16000 * 2, true);
+      view.setUint16(32, 2, true);
+      view.setUint16(34, 16, true);
       writeString(view, 36, 'data');
       view.setUint32(40, samples.length * 2, true);
 
-      // 写入样本数据
-      const sampleBytes = new Uint8Array(buffer, 44);
-      sampleBytes.set(new Uint8Array(samples.buffer));
-
+      const uint8 = new Uint8Array(buffer, 44);
+      uint8.set(new Uint8Array(samples.buffer));
       return new Blob([buffer], { type: 'audio/wav' });
     }
 
@@ -154,60 +381,63 @@
       }
     }
 
-    // 上传处理
-    uploadBtn.addEventListener('click', async () => {
-      const file = fileInput.files[0];
-      if (!file) {
-        showResult('请先选择一个音频文件', 'error');
-        return;
-      }
-
-      uploadBtn.disabled = true;
-      resultDiv.textContent = '⏳ 正在压缩音频…';
-
-      try {
-        // 1. 前端压缩音频
-        const compressedBlob = await convertTo16kMonoWav(file);
-        const originalSize = (file.size / 1024).toFixed(1);
-        const compressedSize = (compressedBlob.size / 1024).toFixed(1);
-        resultDiv.textContent = `✅ 压缩完成（${originalSize} KB → ${compressedSize} KB），正在识别…`;
-
-        // 2. 发送到 Worker
-        const response = await fetch(WORKER_URL, {
-          method: 'POST',
-          body: compressedBlob,
-          headers: {
-            'Content-Type': 'audio/wav',
-          },
-        });
-
-        if (!response.ok) {
-          const err = await response.json().catch(() => ({}));
-          throw new Error(err.error || `服务器错误 (${response.status})`);
-        }
-
-        const data = await response.json();
-        showResult(`
-          <strong>🗣️ 识别语言：</strong>${data.language}<br>
-          <strong>📝 转录内容：</strong>${data.text}
-        `, 'success');
-
-      } catch (err) {
-        showResult(`❌ 出错：${err.message}`, 'error');
-      } finally {
-        uploadBtn.disabled = false;
-      }
-    });
-
-    function showResult(html, type) {
-      resultDiv.innerHTML = html;
-      resultDiv.className = type === 'error' ? 'error' : '';
-      if (type === 'success') {
-        resultDiv.style.background = '#f0fdf4';
-        resultDiv.style.borderColor = '#bbf7d0';
-        resultDiv.style.color = '#166534';
+    // UI 辅助函数
+    function updateButtonState(isRecording) {
+      if (isRecording) {
+        recordBtn.textContent = '⏺️ 录音中… 松手结束';
+        recordBtn.classList.add('recording');
+        recordBtn.disabled = false;
+      } else {
+        recordBtn.textContent = '按住 录音';
+        recordBtn.classList.remove('recording');
       }
     }
+
+    function startTimer() {
+      timerInterval = setInterval(() => {
+        if (!recording) return;
+        const elapsed = Math.floor((Date.now() - recordStartTime) / 1000);
+        statusDiv.innerHTML = `🎙️ 正在录音… <span class="timer">${elapsed}s / 10s</span>`;
+      }, 200);
+    }
+
+    function showResult(html, type) {
+      resultBox.style.display = 'block';
+      resultBox.innerHTML = html;
+      resultBox.className = 'result-box';
+      if (type === 'error') resultBox.classList.add('error');
+      else if (type === 'info') resultBox.classList.add('info');
+    }
+
+    // 事件绑定（同时支持触摸和鼠标）
+    function onStart(e) {
+      e.preventDefault();
+      if (pendingProcess) {
+        statusDiv.textContent = '请等待当前任务完成';
+        return;
+      }
+      startRecording();
+    }
+
+    function onEnd(e) {
+      e.preventDefault();
+      if (recording) {
+        stopRecording();
+      }
+    }
+
+    // 触摸事件（移动端）
+    recordBtn.addEventListener('touchstart', onStart, { passive: false });
+    recordBtn.addEventListener('touchend', onEnd, { passive: false });
+    recordBtn.addEventListener('touchcancel', onEnd, { passive: false });
+
+    // 鼠标事件（用于开发测试）
+    recordBtn.addEventListener('mousedown', onStart);
+    recordBtn.addEventListener('mouseup', onEnd);
+    recordBtn.addEventListener('mouseleave', onEnd); // 鼠标离开按钮也停止
+
+    // 防止页面因长按出现菜单
+    recordBtn.addEventListener('contextmenu', (e) => e.preventDefault());
   </script>
 </body>
 </html>
