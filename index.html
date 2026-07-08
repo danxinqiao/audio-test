@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>语音语言识别（含压缩）</title>
+  <style>
+    body {
+      font-family: system-ui, -apple-system, sans-serif;
+      max-width: 520px;
+      margin: 2rem auto;
+      padding: 0 1.2rem;
+      background: #f9fafb;
+      color: #1f2937;
+    }
+    .card {
+      background: white;
+      border-radius: 16px;
+      padding: 1.8rem;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.05);
+    }
+    h2 {
+      margin: 0 0 0.6rem;
+      font-size: 1.6rem;
+    }
+    .sub {
+      color: #6b7280;
+      margin-bottom: 1.5rem;
+      font-size: 0.95rem;
+    }
+    input[type="file"] {
+      display: block;
+      width: 100%;
+      padding: 0.7rem;
+      border: 2px dashed #d1d5db;
+      border-radius: 10px;
+      background: #f3f4f6;
+      cursor: pointer;
+      margin-bottom: 1rem;
+      font-size: 0.95rem;
+    }
+    button {
+      background: #2563eb;
+      color: white;
+      border: none;
+      padding: 0.8rem 1.6rem;
+      font-size: 1rem;
+      border-radius: 10px;
+      cursor: pointer;
+      font-weight: 500;
+      transition: background 0.2s;
+      width: 100%;
+    }
+    button:hover {
+      background: #1d4ed8;
+    }
+    button:disabled {
+      background: #93c5fd;
+      cursor: not-allowed;
+    }
+    #result {
+      margin-top: 1.5rem;
+      background: #f0fdf4;
+      border: 1px solid #bbf7d0;
+      border-radius: 10px;
+      padding: 1rem;
+      white-space: pre-wrap;
+      font-size: 0.95rem;
+      min-height: 2.5rem;
+    }
+    .error {
+      background: #fef2f2;
+      border-color: #fecaca;
+      color: #b91c1c;
+    }
+    .info {
+      color: #4b5563;
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h2>🎤 语音 → 语言识别</h2>
+    <p class="sub">上传任意音频，自动压缩后识别语言与内容</p>
+
+    <input type="file" id="audioFile" accept="audio/*">
+    <button id="uploadBtn">上传并识别</button>
+
+    <div id="result" class="info">等待上传…</div>
+  </div>
+
+  <script>
+    // ⚠️ 请将这里替换为你的 Cloudflare Worker 地址
+    const WORKER_URL = 'https://audio.gyegt614.top/';
+
+    const fileInput = document.getElementById('audioFile');
+    const uploadBtn = document.getElementById('uploadBtn');
+    const resultDiv = document.getElementById('result');
+
+    /**
+     * 将音频文件转换为 16kHz 单声道 WAV，大幅压缩体积
+     * @param {File} file 原始音频文件
+     * @returns {Promise<Blob>} 压缩后的 WAV Blob
+     */
+    async function convertTo16kMonoWav(file) {
+      const arrayBuffer = await file.arrayBuffer();
+      const audioCtx = new AudioContext({ sampleRate: 16000 });
+      const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+      await audioCtx.close();
+
+      // 提取单声道数据（多声道自动取第一声道）
+      const channelData = audioBuffer.getChannelData(0);
+      const length = channelData.length;
+      const samples = new Int16Array(length);
+      for (let i = 0; i < length; i++) {
+        // 限幅并转为 16 位整数
+        const s = Math.max(-1, Math.min(1, channelData[i]));
+        samples[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+      }
+
+      // 构建 WAV 文件 (44 字节头 + 音频数据)
+      const buffer = new ArrayBuffer(44 + samples.length * 2);
+      const view = new DataView(buffer);
+
+      // RIFF 头
+      writeString(view, 0, 'RIFF');
+      view.setUint32(4, 36 + samples.length * 2, true);
+      writeString(view, 8, 'WAVE');
+
+      // fmt 子块
+      writeString(view, 12, 'fmt ');
+      view.setUint32(16, 16, true);          // PCM 格式
+      view.setUint16(20, 1, true);           // 线性 PCM
+      view.setUint16(22, 1, true);           // 单声道
+      view.setUint32(24, 16000, true);       // 采样率
+      view.setUint32(28, 16000 * 2, true);   // 字节率
+      view.setUint16(32, 2, true);           // 块对齐
+      view.setUint16(34, 16, true);          // 位深度
+
+      // data 子块
+      writeString(view, 36, 'data');
+      view.setUint32(40, samples.length * 2, true);
+
+      // 写入样本数据
+      const sampleBytes = new Uint8Array(buffer, 44);
+      sampleBytes.set(new Uint8Array(samples.buffer));
+
+      return new Blob([buffer], { type: 'audio/wav' });
+    }
+
+    function writeString(view, offset, string) {
+      for (let i = 0; i < string.length; i++) {
+        view.setUint8(offset + i, string.charCodeAt(i));
+      }
+    }
+
+    // 上传处理
+    uploadBtn.addEventListener('click', async () => {
+      const file = fileInput.files[0];
+      if (!file) {
+        showResult('请先选择一个音频文件', 'error');
+        return;
+      }
+
+      uploadBtn.disabled = true;
+      resultDiv.textContent = '⏳ 正在压缩音频…';
+
+      try {
+        // 1. 前端压缩音频
+        const compressedBlob = await convertTo16kMonoWav(file);
+        const originalSize = (file.size / 1024).toFixed(1);
+        const compressedSize = (compressedBlob.size / 1024).toFixed(1);
+        resultDiv.textContent = `✅ 压缩完成（${originalSize} KB → ${compressedSize} KB），正在识别…`;
+
+        // 2. 发送到 Worker
+        const response = await fetch(WORKER_URL, {
+          method: 'POST',
+          body: compressedBlob,
+          headers: {
+            'Content-Type': 'audio/wav',
+          },
+        });
+
+        if (!response.ok) {
+          const err = await response.json().catch(() => ({}));
+          throw new Error(err.error || `服务器错误 (${response.status})`);
+        }
+
+        const data = await response.json();
+        showResult(`
+          <strong>🗣️ 识别语言：</strong>${data.language}<br>
+          <strong>📝 转录内容：</strong>${data.text}
+        `, 'success');
+
+      } catch (err) {
+        showResult(`❌ 出错：${err.message}`, 'error');
+      } finally {
+        uploadBtn.disabled = false;
+      }
+    });
+
+    function showResult(html, type) {
+      resultDiv.innerHTML = html;
+      resultDiv.className = type === 'error' ? 'error' : '';
+      if (type === 'success') {
+        resultDiv.style.background = '#f0fdf4';
+        resultDiv.style.borderColor = '#bbf7d0';
+        resultDiv.style.color = '#166534';
+      }
+    }
+  </script>
+</body>
+</html>
